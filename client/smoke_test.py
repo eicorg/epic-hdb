@@ -25,7 +25,7 @@ Usage
     HDB_PROJECT_ROOT=$(pwd) python client/mcp_server.py
 
     # 2. In another terminal:
-    pip install httpx "mcp[cli]"
+    uv sync --locked --extra client
     python smoke_test.py
     python smoke_test.py --base-url http://127.0.0.1:8001 --username gnigmat --password gnigmat
 

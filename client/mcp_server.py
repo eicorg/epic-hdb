@@ -45,7 +45,7 @@ if it differs.
 
 Setup
 -----
-    pip install "mcp[cli]" django starlette uvicorn asgiref
+    uv sync --locked --extra client
 
     # from the epic-hdb project root (next to manage.py):
     DJANGO_SETTINGS_MODULE=hdb_project.settings \

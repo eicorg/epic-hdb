@@ -37,13 +37,14 @@ The seed_hdb command should contain the following entities:
  * FCFDv2 Readout (to be used in the BTOF-Readout technical system)
 
  Create between 2 and 5 component instances for each component.
- 
+
 
 ## Deployment (epic-hwdb01, RHEL 9)
 
-Every time the tool "pip" is mentioned, use "pip3" on the deployment RHEL machine to
-sidestep ambiguity with the system version of pip, which is tied to an older
-Python. References to "pip" in this document are already pointing to "pip3" explicitely.
+Use uv for dependency management. On the deployment RHEL machine, set
+`UV_PROJECT_ENVIRONMENT=/direct/eic+u/eicmax/.virtualenvs/hdb` when syncing
+so the existing systemd service continues using the same virtualenv. If pip
+is needed for unrelated diagnostics, use `pip3` to avoid the older system pip.
 
 Production/target host: `epic-hwdb01`, RHEL 9, user `eicmax`. Public URL:
 `https://epic-hwdb.sdcc.bnl.gov` (via SDCC's reverse proxy; see the Apache
@@ -173,23 +174,26 @@ the host and fill in the real values.
   `/etc/systemd/system/hdb-gunicorn.service` unit.
 
 ### Python application [running]
-* Requirements are pinned in `requirements.txt` (Python 3.12+, Django 6.0.8,
+* Dependencies are pinned in `pyproject.toml` (Python 3.12+, Django 6.0.8,
   `djangorestframework`, `qrcode[pil]`, `psycopg[binary]` for PostgreSQL, plus
   their transitive dependencies). RHEL 9's default `python3` is 3.9, which is
   too old; install `python3.12` from AppStream (`sudo dnf install python3.12`)
   or use `uv`.
-* Note: `requirements.txt` was generated with `pip3 freeze` from the shared dev
-  virtualenv, so it currently also includes packages that belong to the
-  `hdb_client` CLI/MCP server (`mcp`, `uvicorn`, `starlette`, `httpx`, `typer`,
-  etc.), not the Django web app. Fine for now, but worth splitting into a
-  separate `client/requirements.txt` before relying on this file as the
-  definition of "what the web app needs" — flag this to whoever sets up the
-  production venv.
+* `pyproject.toml` preserves all pins from the former shared dev
+  `requirements.txt`, including the `hdb_client` CLI/MCP server packages
+  (`mcp`, `uvicorn`, `starlette`, `httpx`, `typer`, etc.). `uv.lock` locks the
+  resolved dependencies; `.python-version` selects Python 3.12 by default.
+  Install from the checkout with
+  `UV_PROJECT_ENVIRONMENT=/direct/eic+u/eicmax/.virtualenvs/hdb uv sync --locked --no-editable`
+  on production, or `uv sync --locked --extra client` for development with
+  the MCP CLI extra. Sync removes undeclared packages: this must be a dedicated
+  application environment. Templates/static assets and the
+  `hdb_client` package are included; existing script commands still work.
 * Django REST framework is required in production: it's wrapped in a
   `try/except ImportError` in `settings.py`, so a missing install won't crash
   the app, it will just silently disable the whole `/api/` surface that
-  `hdb_client` depends on. It's in `requirements.txt` now, so a normal
-  `pip3 install -r requirements.txt` covers it — just don't skip that step.
+  `hdb_client` depends on. It's in `pyproject.toml`, so a normal
+  `uv sync --locked` covers it — just don't skip that step.
 * Plan:
   1. [done] Cloned as `eicmax` outside the web root, at `~/projects/epic-hdb`
      (real absolute path `/direct/eic+u/eicmax/projects/epic-hdb` — an NFS
@@ -197,7 +201,9 @@ the host and fill in the real values.
      interactively), with a `virtualenvwrapper`-style venv at
      `~/.virtualenvs/hdb` (`/direct/eic+u/eicmax/.virtualenvs/hdb`),
      Python 3.12.
-  2. [done] `pip3 install -r requirements.txt`.
+    2. [done] Dependencies installed; for future updates, install uv and use
+      `UV_PROJECT_ENVIRONMENT=/direct/eic+u/eicmax/.virtualenvs/hdb uv sync --locked --no-editable`.
+      The uv workflow has been tested locally, not yet applied on the host.
   3. Production settings: `CSRF_TRUSTED_ORIGINS` now includes
      `https://epic-hwdb.sdcc.bnl.gov` **[done]**. `SECRET_KEY`, `DEBUG`,
      `ALLOWED_HOSTS` **[done, 2026-09-28]** — all three now read from
@@ -249,7 +255,8 @@ the host and fill in the real values.
      Note: `data/btof_stave_templates.yaml` is deprecated (superseded by
      `data/btof_split/*.yaml`) — don't load/verify against it.
 * After each `git pull` on the host: activate the venv, run
-  `pip3 install -r requirements.txt` again (in case it changed), then `migrate`
+  `UV_PROJECT_ENVIRONMENT=/direct/eic+u/eicmax/.virtualenvs/hdb uv sync --locked --no-editable`
+  again (in case dependencies changed), then `migrate`
   and `collectstatic`, then restart the gunicorn service. Back up the database
   (`pg_dump`) before any migration. **Confirm `DJANGO_DB_TYPE=postgres` and
   the rest of `/etc/hdb/env` are actually sourced in that shell first** — see

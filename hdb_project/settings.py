@@ -6,8 +6,17 @@ import os
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
+from .ldap_config import load_ldap_config
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+
+HDB_LDAP_CONFIG = load_ldap_config(
+    os.environ.get('DJANGO_LDAP_CONFIG', '/etc/hdb/ldap.conf'),
+    required='DJANGO_LDAP_CONFIG' in os.environ,
+)
+AUTHENTICATION_BACKENDS = ['django.contrib.auth.backends.ModelBackend']
+if HDB_LDAP_CONFIG.enabled:
+    AUTHENTICATION_BACKENDS.insert(0, 'hdb.auth_backends.LDAPBackend')
 
 # DJANGO_DEBUG / DJANGO_ALLOWED_HOSTS / DJANGO_SECRET_KEY are read from the
 # environment (see /etc/hdb/env on RHEL) so production can be locked down

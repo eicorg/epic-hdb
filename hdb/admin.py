@@ -1,5 +1,6 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
+from django.contrib.auth.forms import AdminUserCreationForm
 from django.contrib.auth.models import User
 from .models import (
     Institution, Location, PropertyType, PropertyValue, LogEntry,
@@ -238,7 +239,30 @@ class UserProfileInline(admin.StackedInline):
     fields = ('institution',)
     extra = 1
 
+class OptionalPasswordUserCreationForm(AdminUserCreationForm):
+    usable_password = None
+
+    def validate_passwords(
+        self,
+        password1_field_name="password1",
+        password2_field_name="password2",
+        usable_password_field_name="usable_password",
+    ):
+        has_password = bool(
+            self.cleaned_data.get(password1_field_name)
+            or self.cleaned_data.get(password2_field_name)
+        )
+        self.cleaned_data[usable_password_field_name] = "true" if has_password else "false"
+        super().validate_passwords(
+            password1_field_name, password2_field_name, usable_password_field_name
+        )
+
+
 class CustomUserAdmin(UserAdmin):
+    add_form = OptionalPasswordUserCreationForm
+    add_fieldsets = (
+        (None, {"classes": ("wide",), "fields": ("username", "password1", "password2")}),
+    )
     list_display = ('pk', 'username', 'email', 'first_name', 'last_name',
                     'is_staff', 'institution_name', 'group_names')
     inlines = [UserProfileInline]

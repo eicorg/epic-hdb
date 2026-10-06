@@ -1,0 +1,7 @@
+[ldap]
+enabled = true
+server_url = ldap://addressbook.bnl.gov:389
+search_base = DC=bnl,DC=gov
+username_attribute = sAMAccountName
+ca_cert_file = /etc/pki/tls/certs/ca-bundle.crt
+timeout = 10

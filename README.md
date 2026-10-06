@@ -1,9 +1,9 @@
-# The ePIC Hardware Database
+# Hardware Database (HDB)
 
 This is a Django implementation of the Hardware Database inspired by *The Component
 Database User Guide* (Argonne National Laboratory). The Hardware Database is the
-candidate central repository for documenting, organizing, and tracking components used
-in ePIC and EIC project.
+central repository for documenting, organizing, and tracking hardware components
+across projects and organizations.
 
 ---
 
@@ -12,19 +12,20 @@ in ePIC and EIC project.
 1. [Overview](#overview)
 2. [Project Structure](#project-structure)
 3. [Quick Start](#quick-start)
-4. [Data Model](#data-model)
+4. [PostgreSQL Setup](#postgresql-setup)
+5. [Data Model](#data-model)
    - [Institutions and Locations](#institutions-and-locations)
    - [Domain 1 — Component Catalog](#domain-1--component-catalog)
    - [Domain 2 — Component Inventory](#domain-2--component-inventory)
    - [Domain 3 — Designs](#domain-3--designs)
    - [Cross-Domain: Properties and Logs](#cross-domain-properties-and-logs)
    - [Ownership](#ownership)
-5. [Django Admin](#django-admin)
-6. [Web UI](#web-ui)
-7. [Python Client, CLI, and MCP Server](#python-client-cli-and-mcp-server)
-8. [Seed Data](#seed-data)
-9. [Schema Diagram](#schema-diagram)
-10. [Design Decisions](#design-decisions)
+6. [Django Admin](#django-admin)
+7. [Web UI](#web-ui)
+8. [Python Client, CLI, and MCP Server](#python-client-cli-and-mcp-server)
+9. [Seed Data](#seed-data)
+10. [Schema Diagram](#schema-diagram)
+11. [Design Decisions](#design-decisions)
 
 ---
 
@@ -49,6 +50,9 @@ lifecycle events across all domains.
 ```
 epic-hdb/
 ├── manage.py
+├── pyproject.toml               # Python version, pinned dependencies, packaging
+├── uv.lock                      # Reproducible dependency resolution
+├── .python-version              # Default Python interpreter for uv
 ├── hdb_project/                 # Django project (settings, root URLconf)
 │   ├── settings.py
 │   ├── urls.py
@@ -73,7 +77,6 @@ epic-hdb/
 │   ├── hdb.py                   # Command-line interface
 │   ├── mcp_server.py            # MCP server (for AI assistants / MCP clients)
 │   ├── smoke_test.py            # End-to-end test for the MCP server
-│   ├── requirements.txt
 │   ├── README.md                # Full client/CLI/MCP reference — usage mechanics live here
 │   └── hdb_client/              # Programmatic query client (package)
 │       ├── client.py            # HDBClient (combined entry point)
@@ -96,27 +99,48 @@ epic-hdb/
 
 ## Quick Start
 
-**Requirements:** Python 3.12+, Django 6.0.x, plus `qrcode[pil]` (the
-web UI's inventory QR-code page needs it — everything else only needs Django).
+This quick start uses SQLite for local development. For a shared application
+or PostgreSQL development database, follow [PostgreSQL Setup](#postgresql-setup)
+instead of exporting `DJANGO_DB_TYPE=sqlite` below. The storage directory
+requirements apply to both databases.
+
+**Requirements:** [uv](https://docs.astral.sh/uv/getting-started/installation/).
+uv manages Python 3.12 and the project's `.venv`. `pyproject.toml` preserves the previously
+pinned web app and client dependencies, including Django 6.0.8, Django REST
+framework, Gunicorn, PostgreSQL support, and QR-code/Pillow support;
+`uv.lock` records the resolved versions and distribution hashes.
 
 > Upgraded from Python 3.10 / Django 5.2 to Python 3.12 / Django 6.0.8 in
 > 2026-08. The codebase needed one code change for the jump to Django 6
 > (`CheckConstraint`'s `check=` argument was removed in favor of
 > `condition=`); everything else carried over unchanged. To set up a
-> matching Python 3.12 environment via `uv`, see `setup_py312_env.sh` and
-> `requirements-py312.txt` in the project root.
+> matching Python 3.12 environment, use `uv sync` as shown below.
+> The old upgrade script and
+> dependency snapshot in `attic/` are historical, not the current setup.
 
 ```bash
-pip install django "qrcode[pil]"
+uv sync --locked --extra client
+
+# Local development only (production uses /etc/hdb/env):
+export DJANGO_DB_TYPE=sqlite
+export DJANGO_DEBUG=true
+
+# One-time local setup: create storage directories owned by your account.
+# Run this privileged command yourself; do not use it on production.
+sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" \
+  /var/data/hdb/media /var/data/hdb/static
+
+# Confirm media storage is writable before loading sample images:
+test -w /var/data/hdb/media && test -x /var/data/hdb/media
 
 # Apply all migrations (creates db.sqlite3):
-python manage.py migrate
+uv run --locked --extra client python manage.py migrate
 
 # Load sample ePIC detector data:
-python manage.py seed_hdb
+uv run --locked --extra client python manage.py seed_hdb
 
 # Start the development server:
-python manage.py runserver
+uv run --locked --extra client python manage.py runserver
 
 # Web UI:
 #   http://127.0.0.1:8000/           (login, then Dashboard)
@@ -127,10 +151,36 @@ python manage.py runserver
 #   (or: maxim / maxim — also a superuser, see Seed Data below)
 ```
 
-To use the Python client from the Django shell, add `client/` to the path first:
+`seed_hdb` writes sample images to `MEDIA_ROOT`, currently
+`/var/data/hdb/media`. A `PermissionError` for `/var/data` means the storage
+directory is missing or the account running the command cannot write to it.
+Complete the directory setup above before seeding; if the permission check
+fails, stop and have an administrator fix ownership or access permissions.
+`/var/data/hdb/static` is also needed for `collectstatic`. Do not run
+`seed_hdb` as root or grant world-writable permissions to work around this.
+Existing media files and subdirectories must also be writable by the app
+account. On production, use the Gunicorn service account rather than your
+local account, retain httpd read access, and apply the SELinux contexts
+described in [CLAUDE.md](CLAUDE.md).
+
+uv installs the project in editable mode, exposing `hdb_client` without setting `PYTHONPATH`.
+The `client` extra enables the MCP CLI dependencies; `httpx` for the smoke
+test is already included. Use `uv sync --locked` for the web app alone.
+Commit `uv.lock` alongside `pyproject.toml`; after changing dependencies,
+run `uv lock` and `uv sync --extra client` to update the environment.
+For the remaining examples that use bare `python`, prefix commands with
+`uv run --locked --extra client`, or activate `.venv` first.
+
+For deployment, see `CLAUDE.md`: use `uv sync --locked --no-editable` with
+`UV_PROJECT_ENVIRONMENT` set to the existing service virtualenv. This keeps
+Gunicorn's executable path unchanged. Existing Django settings, database
+environment variables, and service commands are unchanged. uv sync removes
+packages not declared by the project; use a dedicated application environment.
+
+To use the Python client from the Django shell:
 
 ```bash
-PYTHONPATH=client python manage.py shell
+uv run --locked --extra client python manage.py shell
 ```
 
 ```python
@@ -146,6 +196,158 @@ client.designs.bom("BEMC tower")
 
 See [Python Client, CLI, and MCP Server](#python-client-cli-and-mcp-server)
 below for where to go for the complete reference.
+
+---
+
+## PostgreSQL Setup
+
+HDB supports PostgreSQL without application code changes. The locked
+dependencies already include `psycopg[binary]`; no separate Python driver
+installation is needed. Use a dedicated application database and role, not
+the PostgreSQL administrator account.
+
+### 1. Prepare the database server
+
+Have an administrator install and initialize PostgreSQL 14 or newer,
+start its service, and install the `psql` and `pg_dump` client tools.
+Package names, initialization commands, and service names depend on the OS
+and PostgreSQL distribution; RHEL's default package stream may be too old.
+A managed PostgreSQL service also works: ask its administrator to provision
+the database and role described below.
+
+Connect as a PostgreSQL administrator (for example, `sudo -u postgres psql`
+on a local Linux server) and run these commands once for a new database:
+
+```sql
+CREATE ROLE hdb_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE;
+SET password_encryption = 'scram-sha-256';
+\password hdb_app
+CREATE DATABASE hdb OWNER hdb_app;
+\connect hdb
+GRANT USAGE, CREATE ON SCHEMA public TO hdb_app;
+```
+
+`\password` prompts for a password directly in your terminal; do not put
+it in SQL files or command history. Database ownership and schema creation
+rights allow Django migrations to create and alter tables. If reusing an
+existing database, ask its administrator to confirm schema permissions and
+ownership of existing HDB tables rather than rerunning the creation commands.
+
+For a local server, the administrator should confirm TCP connections to
+`127.0.0.1:5432` are enabled and password authentication is allowed in
+`pg_hba.conf`, for example:
+
+```text
+host    hdb    hdb_app    127.0.0.1/32    scram-sha-256
+```
+
+Rules are matched top-to-bottom; an earlier rule may override this example.
+Reload PostgreSQL configuration after approved changes. Do not use `trust`
+authentication or expose port 5432 publicly. For a remote database, have
+the administrator restrict network access to the application host and
+configure verified TLS; set `PGSSLMODE=verify-full` and `PGSSLROOTCERT` to
+the server's trusted CA certificate file as required by your provider.
+
+### 2. Configure the application environment
+
+From the repository root, sync the application and select PostgreSQL:
+
+```bash
+uv sync --locked --extra client
+export DJANGO_DB_TYPE=postgres
+export DJANGO_DB_NAME=hdb
+export DJANGO_DB_USER=hdb_app
+export DJANGO_DB_HOST=127.0.0.1
+export DJANGO_DB_PORT=5432
+
+# Enter the role password locally; it is not stored in shell history.
+read -r -s -p 'Database password: ' DJANGO_DB_PASSWORD
+printf '\n'
+export DJANGO_DB_PASSWORD
+```
+
+`DJANGO_DB_NAME`, `DJANGO_DB_USER`, and `DJANGO_DB_PASSWORD` are required
+in PostgreSQL mode. Host and port default to `127.0.0.1` and `5432`.
+**If `DJANGO_DB_TYPE` is unset, HDB silently defaults to SQLite.** Supply
+the same environment to the web server, CLI/MCP tools, and management commands;
+exports in one terminal do not configure another terminal or systemd.
+uv does not automatically load `.env` files: use an explicit environment-loading
+step or `uv run --env-file /path/to/private/env` if you manage one locally.
+Never commit real passwords or `DJANGO_SECRET_KEY` to git.
+
+### 3. Verify the connection and create the schema
+
+First test the application account independently of Django:
+
+```bash
+psql -h "$DJANGO_DB_HOST" -p "$DJANGO_DB_PORT" \
+    -U "$DJANGO_DB_USER" -d "$DJANGO_DB_NAME" -W \
+    -c 'SELECT current_database(), current_user;'
+
+# Confirm Django actually selected PostgreSQL, without writing records:
+uv run --locked --extra client python manage.py shell -c \
+    'from django.db import connection; assert connection.vendor == "postgresql", "Wrong database backend"; connection.ensure_connection(); print(connection.vendor, connection.settings_dict["NAME"])'
+
+uv run --locked --extra client python manage.py check
+uv run --locked --extra client python manage.py showmigrations hdb
+uv run --locked --extra client python manage.py migrate
+```
+
+Before migrating an existing database, take a backup and check that
+`showmigrations hdb` lists the expected migration chain. Use the committed
+migration files; do not delete or regenerate them to switch database backends.
+
+For a fresh local/demo database, prepare writable media storage as described
+in [Quick Start](#quick-start), then run:
+
+```bash
+uv run --locked --extra client python manage.py seed_hdb
+DJANGO_DEBUG=true uv run --locked --extra client python manage.py runserver
+```
+
+The seed command creates development accounts with passwords matching their
+usernames. **Do not seed a shared or production database with these accounts.**
+For a fresh non-demo installation, create your administrator instead:
+
+```bash
+uv run --locked --extra client python manage.py createsuperuser
+```
+
+Switching backends does not transfer existing SQLite records: `migrate` creates
+the PostgreSQL schema, not a copy of users, passwords, inventory, or designs.
+If preserving data, stop writes, back up SQLite and media, and plan a tested
+Django export/import before switching the running application. Do not seed
+the destination before importing existing data. Uploaded files remain in
+`/var/data/hdb/media`; changing the database does not move them.
+
+### 4. Backups and troubleshooting
+
+Back up PostgreSQL before migrations and regularly during operation:
+
+```bash
+umask 077
+pg_dump -h "$DJANGO_DB_HOST" -p "$DJANGO_DB_PORT" \
+    -U "$DJANGO_DB_USER" -W --format=custom \
+  --file="$HOME/hdb-backup-$(date +%Y%m%d-%H%M%S).dump" "$DJANGO_DB_NAME"
+```
+
+Keep dumps outside git, back up media separately, and test restoration into
+a separate database using `pg_restore`. A dump does not include uploaded
+files or cluster-level roles; document role provisioning separately.
+
+- **Connection refused:** check server status, host/port, listening addresses,
+  and firewall rules.
+- **Password authentication failed / no pg_hba.conf entry:** confirm the role
+  password and the matching authentication rule with the administrator.
+- **Permission denied for schema public or a table:** confirm schema access
+  and ownership of the tables Django migrations need to alter.
+- **Missing tables or unexpected empty data:** verify the backend, database
+  name, and environment in the actual web-server process, then check migrations.
+- **Permission denied for /var/data:** fix media directory access; this is
+  filesystem storage, independent of PostgreSQL.
+
+For the existing RHEL deployment, use the environment and service guidance
+below and the host-specific notes in [CLAUDE.md](CLAUDE.md).
 
 ---
 
@@ -519,6 +721,176 @@ The admin interface at `/admin/` provides full CRUD access to every model:
   an inline `UserProfile` (institution) editor.
 - All list views support filtering and search.
 
+### Users, groups, and external authentication
+
+The main application's Users page is a read-only directory. Add users and
+groups through `/admin/` under Authentication and Authorization. Superusers
+have access automatically; other administrators need active staff accounts
+and the relevant user/group permissions.
+
+On the Add user form, both password fields are optional. Leave both blank
+to create an account with local password authentication disabled. This sets
+Django's unusable-password state, not an empty or default password. If either
+password field is filled, both are required and Django's password matching
+and strength validation still apply. Existing users' passwords are unchanged.
+
+An unusable local password allows the LDAP backend to authenticate the
+account, but **does not enable LDAP automatically**. Configure LDAP as
+described below; without an enabled configuration, only local-password
+accounts can log in. LDAP setup is separate from PostgreSQL and works with
+either supported database.
+
+### LDAP configuration
+
+HDB looks for `/etc/hdb/ldap.conf`, a conventional system configuration
+location outside the checkout. Override the path with `DJANGO_LDAP_CONFIG`
+for development or another deployment layout. Configuration is read at
+startup: restart the application after changing the file. A missing default
+file leaves LDAP disabled; a missing explicitly selected file or invalid
+configuration causes startup to fail rather than silently ignoring it.
+
+The credential-free [deploy/ldap.conf.example](deploy/ldap.conf.example)
+contains the BNL configuration verified from this development host:
+
+```ini
+[ldap]
+enabled = true
+server_url = ldap://addressbook.bnl.gov:389
+search_base = DC=bnl,DC=gov
+username_attribute = sAMAccountName
+ca_cert_file = /etc/pki/tls/certs/ca-bundle.crt
+timeout = 10
+```
+
+An `ldap://` URL always requires StartTLS before any bind; an `ldaps://`
+URL uses TLS directly. Certificate and hostname validation are mandatory,
+and failures never fall back to unencrypted LDAP. On RHEL, the CA bundle
+above verified this endpoint. Other systems must use their appropriate
+trusted CA bundle; an empty `ca_cert_file` uses Python's default trust store.
+Conda installations may have a different or incomplete trust store, so an
+explicit bundle is recommended. `timeout` is in seconds (1 through 60).
+
+Lookups are anonymous; there is no service bind account or join credential
+in this configuration. The backend searches with the configured attribute
+and an escaped username, requires exactly one matching entry, and then binds
+as that entry with the password entered on the login form. User passwords
+are not saved locally or written to logs. Directory referrals are disabled.
+
+#### Development setup: step by step
+
+Run these steps from the repository root. Keep the database environment set
+for the SQLite or PostgreSQL database you already use; LDAP does not change it.
+
+1. **Install the locked dependencies.**
+
+  ```bash
+  uv sync --locked --extra client
+  ```
+
+2. **Create a private configuration file outside the checkout.** The command
+  below preserves an existing file instead of overwriting your configuration.
+
+  ```bash
+  if [[ ! -e "$HOME/.config/hdb/ldap.conf" ]]; then
+     install -D -m 0600 deploy/ldap.conf.example "$HOME/.config/hdb/ldap.conf"
+  fi
+  ```
+
+3. **Review that file in your editor.** For the tested BNL setup, use the INI
+  values above. Confirm `enabled = true` and that `ca_cert_file` points to a
+  readable, trusted CA bundle on this machine. Do not add service passwords
+  or machine-join credentials: this configuration uses anonymous searches.
+
+4. **Select the file and check that Django enables LDAP.** Run these commands
+  in the same terminal that will start the server. This checks configuration
+  loading, not a real user's LDAP password.
+
+  ```bash
+  export DJANGO_LDAP_CONFIG="$HOME/.config/hdb/ldap.conf"
+  uv run --locked --extra client python manage.py check
+  uv run --locked --extra client python manage.py shell -c \
+     'from django.conf import settings; assert settings.HDB_LDAP_CONFIG.enabled, "LDAP is disabled"; print(settings.AUTHENTICATION_BACKENDS)'
+  ```
+
+  The printed list should include `hdb.auth_backends.LDAPBackend` followed by
+  Django's `ModelBackend`. Repeat the export when opening a new terminal.
+
+5. **Restart the development server with that environment.** Stop an existing
+  development server with Ctrl+C, then start it from the terminal used above.
+
+  ```bash
+  DJANGO_DEBUG=true uv run --locked --extra client python manage.py runserver
+  ```
+
+6. **Provision the HDB account.** Visit `/admin/` and sign in with your local
+  administrator (`admin/admin` for a seeded development database). Under
+  Authentication and Authorization, choose Users, then Add user. Enter the
+  exact directory username and leave both password fields blank. Save the
+  account, assign its institution and groups, and confirm it is active.
+  For an existing account, use its admin password-change form to disable
+  password-based authentication instead of setting a blank local password.
+  Keep your local administrator password enabled as a fallback.
+
+7. **Test the user's login.** Log out of the administrator session or open a
+  private browser window, visit `/`, and enter the directory username and
+  that user's LDAP password. The login form itself does not change. The
+  password owner should perform this test; do not share the password in chat
+  or save it in a script. If login fails, use the troubleshooting notes below.
+
+#### Production setup: step by step
+
+These steps require an authorized administrator; do not run them against a
+live deployment without approval. Do not commit the populated configuration.
+
+1. **Update the application dependencies** using the service's virtualenv,
+  following [Shell environment for deployment](#shell-environment-for-deployment).
+  Keep PostgreSQL and the other production settings unchanged.
+
+2. **Install a reviewed copy** of [deploy/ldap.conf.example](deploy/ldap.conf.example)
+  as `/etc/hdb/ldap.conf`. Use root ownership, mode 0640, and the application's
+  service group (`eicmax` on the existing RHEL host). Ensure the service account
+  can read the file and traverse `/etc/hdb`, but cannot modify the config.
+  Check that the configured CA bundle is readable by that account.
+
+3. **Select the configuration path.** `/etc/hdb/ldap.conf` is the default, so
+  no new environment variable is needed for that location. For another path,
+  add `DJANGO_LDAP_CONFIG=/absolute/path/to/ldap.conf` to the private service
+  environment file, currently `/etc/hdb/env`. Validate configuration with
+  `manage.py check` using the same environment and virtualenv as Gunicorn.
+
+4. **Restart the application service** after the approved configuration change.
+  On the existing deployment, the administrator runs:
+
+  ```bash
+  sudo systemctl restart hdb-gunicorn
+  ```
+
+5. **Provision and test the user** as in development steps 6 and 7, using HTTPS
+  and your real local administrator credentials, not the seeded defaults.
+  Confirm local administrator login still works as well. Each HDB account
+  must exist and be active before its owner can use LDAP login.
+
+Only existing, active HDB accounts without usable local passwords use LDAP.
+HDB does not automatically create users, import LDAP groups, grant staff or
+superuser access, or change ownership. Accounts with local passwords continue
+to use those passwords only, including the local administrator; failed local
+logins are not retried against LDAP. Browser login, Django admin, REST Basic
+authentication, and MCP Basic authentication use Django's configured backends.
+Use HTTPS for client access in production, independently of LDAP's TLS.
+
+Set `enabled = false` and restart to disable LDAP. Local accounts continue
+working, but LDAP-only accounts cannot log in while it is disabled or unreachable.
+Existing sessions are governed by Django's session/backend behavior; disabling
+LDAP is not a substitute for explicitly revoking sessions when required.
+
+Anonymous lookup and TLS have been verified; a successful login using a real
+directory password still needs to be tested by its owner. Never paste that
+password into chat or put it in a test script. For failures, first check that
+the same config path is supplied to the running process, that the CA bundle
+is readable, and that the HDB account exists, is active, and has local password
+authentication disabled. Use the short directory username, not `DOMAIN\\user`
+or an email address unless that is the configured directory attribute value.
+
 ---
 
 ## Web UI
@@ -697,36 +1069,57 @@ explicitly documented as such in `client/README.md`.
 
 ## Note for testers/developers
 
-To completely reset the database, use these commands:
+For a disposable SQLite development database only, stop the server and back
+up the database and media before resetting. These commands do not reset
+PostgreSQL. Keep the committed migration files intact:
 ```bash
 # from your project root (where manage.py lives)
+export DJANGO_DB_TYPE=sqlite
 rm -f db.sqlite3
-rm -rf hdb/migrations
-python manage.py makemigrations hdb
-python manage.py migrate
-python manage.py seed_hdb
+uv run --locked --extra client python manage.py migrate
+uv run --locked --extra client python manage.py seed_hdb
 ```
 
 ---
 
 ## Shell environment for deployment
 
+Use [deploy/env.example](deploy/env.example) as the key reference for the
+private `/etc/hdb/env` file. Set `DJANGO_DB_TYPE=postgres`, the real database
+credentials, a unique `DJANGO_SECRET_KEY`, `DJANGO_DEBUG=false`, and
+`DJANGO_ALLOWED_HOSTS` for your deployment's actual hostname. The example
+contains hostnames from the original deployment; replace them for a new site.
+Never commit the populated file. The existing file is root-owned, mode 600,
+and loaded by systemd through `EnvironmentFile=/etc/hdb/env`.
+
+For uv dependency updates on the existing host, preserve the virtualenv used
+by the service:
+
 ```bash
-DJANGO_SECRET_KEY=some-long-random-string
-DJANGO_DB_NAME=hwdb
-DJANGO_DB_USER=hwdb_user
-DJANGO_DB_PASSWORD=XYZ
-DJANGO_DB_HOST=127.0.0.1
-DJANGO_DB_PORT=5432
+UV_PROJECT_ENVIRONMENT=/direct/eic+u/eicmax/.virtualenvs/hdb \
+    uv sync --locked --no-editable
 ```
+
+Do not run production commands through a new default `.venv`; use the service
+environment and load the same private configuration for management commands.
 
 ## Setting the Django and other environment on the deployment machine
 
+An ordinary user shell cannot source the root-only `/etc/hdb/env` file.
+Have an authorized administrator run management commands with that file
+loaded; for example, this read-only connection check on the existing host:
+
 ```bash
-cd ~/projects/epic-hdb
-source ~/.virtualenvs/hdb/bin/activate
-set -a; source /etc/hdb/env; set +a
+sudo bash -c '
+  set -a; source /etc/hdb/env; set +a
+  cd /direct/eic+u/eicmax/projects/epic-hdb
+  /direct/eic+u/eicmax/.virtualenvs/hdb/bin/python manage.py shell -c '\''from django.db import connection; assert connection.vendor == "postgresql"; connection.ensure_connection(); print(connection.vendor, connection.settings_dict["NAME"])'\''
+'
 ```
+
+Back up the database before running `migrate`. Run `collectstatic` using the
+same environment and ensure `/var/data/hdb/static` and `/var/data/hdb/media`
+have the application/httpd permissions described in [CLAUDE.md](CLAUDE.md).
 
 ## Updating the running code on the deployment machine:
 

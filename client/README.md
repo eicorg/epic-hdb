@@ -24,19 +24,19 @@ manage.py seed_hdb`), so every example output you see here is real.
 From the project root (next to `manage.py`):
 
 ```bash
-pip install -r client/requirements.txt
+uv sync --locked --extra client
 ```
 
-`client/requirements.txt` covers the CLI and the MCP server (`django`,
-`mcp[cli]`, `starlette`, `uvicorn`, `asgiref`, `PyYAML`). If you also want to
-run `smoke_test.py`, additionally install `httpx`:
+The root `pyproject.toml` pins the existing web app and client dependencies,
+including `httpx` for `smoke_test.py`. The `client` extra enables `mcp[cli]`.
+uv uses the Python 3.12 version selected by `.python-version` and installs
+the project in editable mode, making `hdb_client` importable without adding
+`client/` to `PYTHONPATH`. Run the commands below with
+`uv run --locked --extra client python` instead of bare `python`, or activate
+the managed environment with `source .venv/bin/activate` first.
 
-```bash
-pip install httpx
-```
-
-Nothing here needs `djangorestframework` — that's only used by the web app's
-`/api/` endpoints (`hdb/views.py`), which is a separate, unrelated code path.
+The client code does not depend on `djangorestframework`, although it is
+installed for the web app's `/api/` endpoints (`hdb/views.py`).
 
 ---
 
@@ -861,13 +861,13 @@ substitute for a real solution in a multi-worker deployment.
 ### Setup
 
 ```bash
-pip install "mcp[cli]" django starlette uvicorn asgiref
+uv sync --locked --extra client
 
 # from the project root, next to manage.py:
 DJANGO_SETTINGS_MODULE=hdb_project.settings \
 HDB_PROJECT_ROOT=/path/to/epic-hdb \
 HDB_MCP_PUBLIC_HOST=your-tunnel-hostname.trycloudflare.com \
-python client/mcp_server.py
+uv run --locked --extra client python client/mcp_server.py
 ```
 
 Runs on `0.0.0.0:8001` (edit the bottom of `mcp_server.py` to change).
@@ -938,13 +938,13 @@ database, running it repeatedly no longer leaves behind test data.
 
 ```bash
 # Terminal 1
-python manage.py seed_hdb          # idempotent, safe to re-run
-HDB_PROJECT_ROOT=$(pwd) python client/mcp_server.py
+uv run --locked --extra client python manage.py seed_hdb          # idempotent, safe to re-run
+HDB_PROJECT_ROOT=$(pwd) uv run --locked --extra client python client/mcp_server.py
 
 # Terminal 2
-pip install httpx "mcp[cli]"
-python client/smoke_test.py
-python client/smoke_test.py --base-url http://127.0.0.1:8001 --username gnigmat --password gnigmat
+uv sync --locked --extra client
+uv run --locked --extra client python client/smoke_test.py
+uv run --locked --extra client python client/smoke_test.py --base-url http://127.0.0.1:8001 --username gnigmat --password gnigmat
 ```
 
 Last verified run (before the write tool was removed): **24/24 checks
@@ -960,6 +960,5 @@ and no-write-tool checks pass against a running instance.
   *Access control* above. There is currently no way, in any of the three
   layers, for a caller to assign a new record's ownership to anyone other
   than themselves.
-- `client/requirements.txt` intentionally does not pin `djangorestframework`
-  — the client layer's own serializers (`hdb_client/serializers.py`) are
+- The client layer's own serializers (`hdb_client/serializers.py`) are
   plain functions, independent of the web app's DRF-based `/api/` endpoints.
