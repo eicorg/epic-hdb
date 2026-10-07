@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/opt/hdb/.venv/bin/python
 """Deploy a reviewed HDB revision.  Run only as the hdb service account."""
 
 from __future__ import annotations
