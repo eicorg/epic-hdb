@@ -88,11 +88,15 @@ sudo install -d -o hdb -g hdb -m 0750 /var/data/hdb/static
 sudo install -d -o hdb -g hdb -m 0750 /var/backups/hdb
 sudo install -d -o root -g hdb -m 0750 /etc/hdb
 sudo install -o root -g hdb -m 0640 /dev/null /etc/hdb/env
+sudo install -d -o hdb -g hdb -m 0750 /var/backups/hdb
+sudo -u hdb -H test -w /var/backups/hdb && echo "hdb can write backups"
 ```
 
 `hdb` owns only the application files and its runtime data.  `/etc/hdb/env` is
 root-owned, but the `hdb` group can read it because Django needs the database
 password when it starts.
+
+`/var/backups/hdb` is required because `deploy-hdb.py` creates a PostgreSQL dump there before migrations.  `deploy-hdb.py` exists in the repository path at `deploy/deploy-hdb.py` and is not copied separately to a release area.  The cloned area is the location where this script can be executed `/opt/hdb/deploy/deploy-hdb.py`.
 
 ## 4. Check out HDB and create the locked Python environment
 
