@@ -46,6 +46,13 @@ CSRF_TRUSTED_ORIGINS = [
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
+HTTPS_COOKIES = os.environ.get(
+    "DJANGO_SECURE_COOKIES", "false"
+).lower() in ("1", "true", "yes", "on")
+
+SESSION_COOKIE_SECURE = HTTPS_COOKIES
+CSRF_COOKIE_SECURE = HTTPS_COOKIES
+
 # Apache forwards the original Host header as X-Forwarded-Host (see
 # deploy/httpd/hdb.conf's RequestHeader line) because ProxyPass sends
 # requests to gunicorn as http://127.0.0.1:8002/, so without this
