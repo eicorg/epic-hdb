@@ -371,14 +371,19 @@ Open `http://localhost:18080/`. The Django admin should have its normal styling.
 
 Do not expose HDB's login page over plain HTTP. LDAP StartTLS protects the application-to-directory connection; HTTPS protects users' credentials between their browser and Nginx.
 
-Before publishing, obtain a trusted, institutionally managed TLS certificate and private key for `hdb.eic.bnl.gov`. Obtain the exact paths from the system administrators. This guide uses these placeholders:
+The institutional TLS assets for this host are installed at:
 
 ```text
-<certificate-full-chain.pem>
-<private-key.pem>
+Certificate and CA chain: /etc/nginx/ssl/hdb.eic.bnl.gov.crt
+Private key:               /etc/nginx/ssl/hdb.eic.bnl.gov.key
 ```
 
-Replace `/etc/nginx/conf.d/hdb.conf` with the following configuration, substituting the supplied certificate paths:
+The certificate is an InCommon OV SSL certificate for `hdb.eic.bnl.gov`; its
+current validity ends on 2027-04-26. Do not move, copy, commit, or otherwise
+expose the private key. Certificate renewal follows the BNL/InCommon
+certificate-management process.
+
+Replace `/etc/nginx/conf.d/hdb.conf` with the following configuration:
 
 ```nginx
 server {
@@ -394,8 +399,8 @@ server {
     listen [::]:443 ssl;
     server_name hdb.eic.bnl.gov;
 
-    ssl_certificate     <certificate-full-chain.pem>;
-    ssl_certificate_key <private-key.pem>;
+    ssl_certificate     /etc/nginx/ssl/hdb.eic.bnl.gov.crt;
+    ssl_certificate_key /etc/nginx/ssl/hdb.eic.bnl.gov.key;
     ssl_protocols TLSv1.2 TLSv1.3;
 
     client_max_body_size 50m;
@@ -452,13 +457,17 @@ sudo systemctl restart hdb-gunicorn.service
 sudo systemctl status hdb-gunicorn.service
 ```
 
-Finally, permit HTTP only for the redirect and HTTPS for the application. This does not replace any required BNL network-firewall approval.
+Finally, permit HTTP only for the redirect and HTTPS for the application. On
+this host, the active firewalld zone is `server_pool`; check the active zone
+before applying rules on a different system. This does not replace any required
+BNL network-firewall approval.
 
 ```bash
-sudo firewall-cmd --permanent --add-service=http
-sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --get-active-zones
+sudo firewall-cmd --permanent --zone=server_pool --add-service=http
+sudo firewall-cmd --permanent --zone=server_pool --add-service=https
 sudo firewall-cmd --reload
-sudo firewall-cmd --list-services
+sudo firewall-cmd --zone=server_pool --list-services
 ```
 
 Users should use:
@@ -467,4 +476,28 @@ Users should use:
 https://hdb.eic.bnl.gov/
 ```
 
-Keep Gunicorn loopback-only. Certificate renewal must follow the institutional certificate-management process; reload Nginx after renewal if that process does not do so automatically.
+Keep Gunicorn loopback-only. Reload Nginx after a certificate renewal if the
+institutional renewal process does not do so automatically.
+
+## 13. Pilot-user validation
+
+Before broad release, use a small group of approved users to validate the
+production service.
+
+- Use `https://hdb.eic.bnl.gov/`; HTTP must only redirect to HTTPS.
+- Confirm the TLS certificate is trusted in a normal browser.
+- Confirm an approved LDAP user has an active HDB account, with a username
+  matching their `sAMAccountName` and an unusable local password.
+- Confirm the local Django administrator can still log in as a break-glass
+  account.
+- Confirm static styling, media access, normal login, and intended read/write
+  permissions.
+- Monitor the application and web-server logs during testing:
+
+  ```bash
+  sudo journalctl -u hdb-gunicorn.service -f
+  sudo tail -f /var/log/nginx/access.log /var/log/nginx/error.log
+  ```
+
+Do not commit `/etc/hdb/env`, `/etc/hdb/ldap.conf`, the TLS private key,
+database backups, or production uploaded media to the repository.
